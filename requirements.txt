@@ -1,0 +1,4 @@
+openpyxl
+pypinyin
+stegano
+pilgram
