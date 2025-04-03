@@ -526,37 +526,6 @@ class CounterNode:
             now_number_text = f"现在输出的数字是：{number}"
             return (number, now_number_text)
 
-class Adapt_Coordinates:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "coordinates": ("STRING", {"multiline": False, "forceInput": True}),
-                "width": ("INT", {"forceInput": True}),
-                "height": ("INT", {"forceInput": True}),
-            },
-        }
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("coord_str",)
-    FUNCTION = "adapt_coordinates"
-    CATEGORY = "Sanmi Nodes/Tweaked Nodes"
-
-    def adapt_coordinates(self, coordinates, width, height):
-        scale_factor_x = round(width / 512)
-        scale_factor_y = round(height / 512)
-
-        coordinates_out = [
-            {
-                "x": coord["x"] * scale_factor_x if coord["x"] != 0 else 0,
-                "y": coord["y"] * scale_factor_y if coord["y"] != 0 else 0,
-            }
-            for coord in eval(coordinates)
-        ]
-
-        coordinates_out = str(coordinates_out)
-        print("coordinates_out1:", type(coordinates_out), coordinates_out)
-        return (coordinates_out,)
 
 class SpecialCounterNode:
     def __init__(self):
@@ -886,8 +855,6 @@ class SANMIN_Adapt_Coordinates:
 
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
-    "sanmi Adapt Coordinates": Adapt_Coordinates,
-
     "sanmi Load Image Batch": Load_Image_Batch,
     "SANMIN Adapt Coordinates": SANMIN_Adapt_Coordinates,
     "sanmi Florence2toCoordinates": SanmiFlorence2toCoordinates,
@@ -899,8 +866,6 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "sanmi Adapt Coordinates": "Adapt Coordinates",
-
     "sanmi Load Image Batch": "Sanmi Load Image Batch",
     "SANMIN Adapt Coordinates": "Sanmi Adapt_Coordinates",
     "sanmi Florence2toCoordinates": "Sanmi Florence2toCoordinates",

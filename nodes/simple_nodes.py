@@ -2290,7 +2290,7 @@ class BlendICLight:
                 "ic_light_image": ("IMAGE",),
                 "original_image": ("IMAGE", ),
                 "blend_factor": ("FLOAT", {"default": 0.75, "min": 0.00, "max": 1.00, "step": 0.01}),
-                "blend_mode": (["normal","brighter","softer"],{"default": "soft_light"}),
+                "blend_mode": (["normal","brighter","softer"],{"default": "softer"}),
             }
         }
 
