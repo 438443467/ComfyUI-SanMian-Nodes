@@ -2435,6 +2435,201 @@ class BlendICLight:
 
         return tensor_out
 
+class FilterPromptWords:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "input_string": ("STRING", {"multiline": True}),
+                "keep_words": ("STRING", {"default": "1boy,1girl"}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("string",)
+    FUNCTION = "gogo"
+    CATEGORY = "Sanmi Nodes/Basics Nodes"
+
+    def gogo(self, input_string, keep_words):
+        # 处理保留单词（自动转换分隔符 + 去空格 + 过滤空值）
+        keep_processed = normalize_separators(keep_words)
+        keep_set = {word.strip() for word in keep_processed.split(',') if word.strip()}
+
+        # 处理输入字符串（自动转换分隔符 + 保持顺序）
+        input_processed = normalize_separators(input_string)
+        input_list = [word.strip()
+                      for word in input_processed.split(',')
+                      if word.strip()]
+
+        # 过滤并保留原始顺序
+        filtered = [word for word in input_list if word in keep_set]
+
+        return (', '.join(filtered),)
+
+
+class ColorOverlayOnMask:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image":("IMAGE",),
+                "mask": ("MASK",),
+                "invert": ("BOOLEAN", {"default": False}),  # 是否反转遮罩
+                "fill_color": (
+                    ["Custom", "white","black","yellow","red", "gray", "blue", "green"],
+                    {"default": "white"}),  # 默认字符串
+                "color_hex": ("STRING", {"multiline": False, "default": "#FFFFFF"}),  # 默认字符串
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "gogo"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Image"
+    DESCRIPTION = "使用颜色覆盖图像遮罩处区域"
+
+    def gogo(self, image, mask, invert, fill_color, color_hex):
+        # 转换输入张量为PIL图像
+        image = tensor2pil(image)
+        orig_size = image.size
+
+        # 处理颜色选择
+        color_map = {
+            "white": (255, 255, 255),
+            "black": (0, 0, 0),
+            "red": (255, 0, 0),
+            "green": (0, 128, 0),
+            "blue": (0, 0, 255),
+            "yellow": (255, 255, 0),
+            "gray": (128, 128, 128)
+        }
+
+        if fill_color != "Custom":
+            color_rgb = color_map.get(fill_color, (255, 255, 255))
+        else:
+            try:
+                hex_str = color_hex.lstrip('#')
+                if len(hex_str) != 6:
+                    raise ValueError
+                color_rgb = tuple(int(hex_str[i:i + 2], 16) for i in (0, 2, 4))
+            except:
+                color_rgb = (255, 255, 255)  # 默认白色
+
+        # 处理遮罩
+        mask = mask.cpu().numpy().squeeze() * 255
+        mask = Image.fromarray(mask.astype(np.uint8)).convert("L")
+        mask = mask.resize(orig_size, Image.NEAREST)
+
+        if invert:
+            mask = ImageOps.invert(mask)
+
+        # 创建纯色图层
+        color_layer = Image.new("RGBA", orig_size, color_rgb + (255,))
+
+        # 合成图像
+        image = image.convert("RGBA")
+        image.putalpha(255)  # 保持原始透明度
+        image.paste(color_layer, (0, 0), mask)
+
+        # 返回张量格式
+        return (pil2tensor(image.convert("RGB")),)
+
+
+class RectMaskAnalyzer:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "width": ("INT", {"default": 512, "min": 0, "step": 1
+                    , "tooltip": "图像的宽."}),
+                "height": ("INT", {"default": 512, "min": 0, "step": 1
+                    , "tooltip": "图像的高."}),
+                "left_cut": ("INT", {"default": 0, "min": 0, "step": 1
+                    , "tooltip": "图像白色区域左侧减少的值."}),
+                "right_cut": ("INT", {"default": 0, "min": 0, "step": 1
+                    , "tooltip": "图像白色区域右侧减少的值."}),
+                "up_cut": ("INT", {"default": 0, "min": 0, "step": 1
+                    , "tooltip": "图像白色区域上侧减少的值."}),
+                "down_cut": ("INT", {"default": 0, "min": 0, "step": 1
+                    , "tooltip": "图像白色区域下侧减少的值."}),
+
+            },
+            "optional": {
+                "mask_composition": ("MASK",{"tooltip": "输入一张构图专用的遮罩"}),  # 蒙版
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING",)
+    RETURN_NAMES = ("image_composition", "mask_composition","value",)
+    FUNCTION = "gogo"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Mask"
+    DESCRIPTION = "用于生成一张黑白矩形图案的构图遮罩.如果有输入的mask_composition，则默认输出相同的值,并输出其required参数,以便手动输入数值获得相同结果."
+
+    def gogo(self, width, height, left_cut, right_cut, up_cut, down_cut, mask_composition=None):
+        if mask_composition is not None:
+            # 处理输入的mask_composition
+            H = mask_composition.shape[-2]
+            W = mask_composition.shape[-1]
+            x_min, y_min, w, h = get_white_mask_bounding_box(mask_composition)
+
+            if w == 0 or h == 0:
+                left_cut_calculated = 0
+                right_cut_calculated = 0
+                up_cut_calculated = 0
+                down_cut_calculated = 0
+            else:
+                x_max = x_min + w - 1
+                y_max = y_min + h - 1
+                left_cut_calculated = x_min
+                right_cut_calculated = W - x_max - 1
+                up_cut_calculated = y_min
+                down_cut_calculated = H - y_max - 1
+                # 确保切割参数非负
+                left_cut_calculated = max(left_cut_calculated, 0)
+                right_cut_calculated = max(right_cut_calculated, 0)
+                up_cut_calculated = max(up_cut_calculated, 0)
+                down_cut_calculated = max(down_cut_calculated, 0)
+
+            value_str = f"width:{W},height:{H},left_cut:{left_cut_calculated},right_cut:{right_cut_calculated},up_cut:{up_cut_calculated},down_cut:{down_cut_calculated}"
+            # 将mask转换为IMAGE格式
+            image_out = mask_composition.unsqueeze(-1).repeat(1, 1, 1, 3)
+            return (image_out, mask_composition, value_str)
+        else:
+            # 生成新的mask
+            mask = torch.zeros((1, height, width), dtype=torch.float)  # 初始化为全黑
+
+            # 计算有效区域
+            x_min = left_cut
+            x_max = width - right_cut - 1
+            y_min = up_cut
+            y_max = height - down_cut - 1
+
+            # 确保坐标不越界
+            x_min = max(x_min, 0)
+            x_max = min(x_max, width - 1)
+            y_min = max(y_min, 0)
+            y_max = min(y_max, height - 1)
+
+            # 仅当有效区域存在时填充白色
+            if x_max >= x_min and y_max >= y_min:
+                mask[:, y_min:y_max + 1, x_min:x_max + 1] = 1.0  # 填充有效区域为白色
+
+            # 转换为图像格式并返回
+            image_out = mask.unsqueeze(-1).repeat(1, 1, 1, 3)
+            value_str = f"width:{width},height:{height},left_cut:{left_cut},right_cut:{right_cut},up_cut:{up_cut},down_cut:{down_cut}"
+            return (image_out, mask, value_str,)
+
+"""
+当前目录：
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Image"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Mask"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Input"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Path"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/Logic"
+    CATEGORY = "Sanmi Nodes/Basics Nodes/To"
+    CATEGORY = "Sanmi Nodes/Basics Nodes"
+    CATEGORY = "Sanmi Nodes/Special Nodes"
+"""
 NODE_CLASS_MAPPINGS = {
     "sanmi AddTextToImage": AddTextToImage,
     "sanmi AdjustHexBrightness": AdjustHexBrightness,
@@ -2447,9 +2642,11 @@ NODE_CLASS_MAPPINGS = {
 
     "sanmi Chinese To Character": ChineseToCharacter,
     "sanmi CreateTxtForImages": CreateTxtForImages,
+    "sanmi ColorOverlayOnMask":ColorOverlayOnMask,
 
     "sanmi Float": Float,
     "sanmi Int90": Int90,
+    "sanmi Filter Prompt Words":FilterPromptWords,
 
     "sanmi Get Content From Excel": GetContentFromExcel,
     "sanmi Get LastPathComponent": GetLastPathComponent,
@@ -2470,6 +2667,7 @@ NODE_CLASS_MAPPINGS = {
 
     "sanmi Read Image Prompt": ReadImagePrompt,
     "sanmi Reduce Mask": ReduceMask,
+    "sanmi RectMaskAnalyzer": RectMaskAnalyzer,
 
     "sanmi Compare": SanmiCompare,
     "sanmi CompareV2": SanmiCompareV2,
@@ -2501,11 +2699,13 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
     "sanmi Chinese To Character": "Chinese To Character",
     "sanmi CreateTxtForImages": "Create Txt For Images",
+    "sanmi ColorOverlayOnMask": "Color Overlay On Mask",
 
     "sanmi ImageBatchSplitter": "Image Batch Splitter",
 
     "sanmi Float": "Float",
     "sanmi Int90": "Int 90",
+    "sanmi Filter Prompt Words": "Filter Prompt Words",
 
     "sanmi Get Content From Excel": "Get Content From Excel",
     "sanmi Get LastPathComponent": "Get Last Path Component",
@@ -2524,6 +2724,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
     "sanmi Read Image Prompt": "Read Image Prompt",
     "sanmi Reduce Mask": "Reduce Mask",
+    "sanmi RectMaskAnalyzer": "RectMask Analyzer",
 
     "sanmi Compare": "Sanmi Compare",
     "sanmi CompareV2": "Sanmi Compare V2",

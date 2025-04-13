@@ -853,6 +853,147 @@ class SANMIN_Adapt_Coordinates:
         # print("coordinates_out1:", type(coordinates_out), coordinates_out)
         return (coordinates_out,)
 
+import torchvision.transforms.v2 as T
+def image_to_tensor(image):
+    return T.ToTensor()(image).permute(1, 2, 0)
+def tensor_to_image(image):
+    return np.array(T.ToPILImage()(image.permute(2, 0, 1)).convert('RGB'))
+
+class FaceAlignPro:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "analysis_models": ("ANALYSIS_MODELS",),
+                "image_from": ("IMAGE",),
+            },
+            "optional": {
+                "image_to": ("IMAGE",),
+                "mask": ("MASK",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "FLOAT", "JSON")
+    RETURN_NAMES = ("IMAGE", "mask", "angle", "json")
+    FUNCTION = "align"
+    CATEGORY = "FaceAnalysis"
+
+    def align(self, analysis_models, image_from, image_to=None, mask=None):
+        # 计算旋转角度
+        current_angle = self._calculate_angle(analysis_models, image_from, image_to)
+        rounded_angle = round(current_angle, 2)
+
+        # 处理源
+        pil_image = Image.fromarray(tensor_to_image(image_from[0]))
+        rotated_image = pil_image.rotate(
+            current_angle,
+            resample=Image.Resampling.BICUBIC,
+            expand=True
+        )
+        image_tensor = image_to_tensor(rotated_image).unsqueeze(0)
+
+        # 处理mask
+        if mask is not None:
+            mask_np = (mask[0].cpu().numpy() * 255).astype(np.uint8)
+            mask_pil = Image.fromarray(mask_np, mode='L')
+            rotated_mask = mask_pil.rotate(
+                current_angle,
+                resample=Image.Resampling.BICUBIC,
+                expand=True
+            )
+            rotated_mask_np = np.array(rotated_mask).astype(np.float32) / 255.0
+            mask_tensor = torch.from_numpy(rotated_mask_np).unsqueeze(0)
+        else:
+            mask_tensor = torch.zeros((1, rotated_image.height, rotated_image.width), dtype=torch.float32)
+
+        # 创建元数据
+        original_width, original_height = pil_image.size
+        json_data = {
+            "original_height": int(original_height),
+            "original_width": int(original_width),
+            "rotated_angle": rounded_angle,
+            "rotated_height": rotated_image.height,
+            "rotated_width": rotated_image.width,
+        }
+
+        return (image_tensor, mask_tensor, rounded_angle, json_data)
+
+    def _calculate_angle(self, models, img_from, img_to=None):
+        img_data = tensor_to_image(img_from[0])
+        kps = models.get_keypoints(img_data)
+        angle = np.degrees(np.arctan2(
+            kps[0][1] - kps[1][1],
+            kps[0][0] - kps[1][0]
+        ))
+
+        if img_to is not None:
+            target_kps = models.get_keypoints(tensor_to_image(img_to[0]))
+            angle -= np.degrees(np.arctan2(
+                target_kps[0][1] - target_kps[1][1],
+                target_kps[0][0] - target_kps[1][0]
+            ))
+
+        return float(angle)
+
+
+class FaceAlignProRestore:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "json": ("JSON",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("IMAGE",)
+    FUNCTION = "restore"
+    CATEGORY = "FaceAnalysis"
+
+    def restore(self, image, json):
+        if image.shape[0] != 1:
+            raise ValueError("Batch size must be 1 for restoration.")
+
+        img_np = tensor_to_image(image[0])
+        pil_image = Image.fromarray(img_np)
+
+        original_width = json["original_width"]
+        original_height = json["original_height"]
+        rotated_angle = json["rotated_angle"]
+
+        # 逆旋转并扩展画布
+        restored_pil = pil_image.rotate(
+            -rotated_angle,
+            resample=Image.Resampling.BICUBIC,
+            expand=True
+        )
+
+        # 计算中心裁剪区域
+        width, height = restored_pil.size
+        left = (width - original_width) / 2
+        top = (height - original_height) / 2
+        right = (width + original_width) / 2
+        bottom = (height + original_height) / 2
+
+        # 执行中心裁剪（确保坐标为整数）
+        restored_pil = restored_pil.crop((
+            int(max(0, left)),
+            int(max(0, top)),
+            int(min(width, right)),
+            int(min(height, bottom))
+        ))
+
+        # 确保裁剪后尺寸精确，处理奇偶差异
+        restored_pil = restored_pil.resize(
+            (original_width, original_height),
+            resample=Image.Resampling.BICUBIC
+        )
+
+        restored_tensor = image_to_tensor(restored_pil).unsqueeze(0)
+        return (restored_tensor,)
+
+
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
     "sanmi Load Image Batch": Load_Image_Batch,
@@ -863,6 +1004,9 @@ NODE_CLASS_MAPPINGS = {
     "sanmi Special Counter": SpecialCounterNode,
     "sanmi String Counter": StringCounterNode,
     "sanmi String Counter V2": StringCounterNode_V2,
+
+    "FaceAlignPro": FaceAlignPro,
+    "FaceAlignProRestore":FaceAlignProRestore,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -874,4 +1018,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "sanmi Special Counter": "Special Counter",
     "sanmi String Counter": "String Counter",
     "sanmi String Counter V2": "String Counter V2",
+
+    "FaceAlignPro": "Face Align Pro",
+    "FaceAlignProRestore": "Face Align Pro Restore",
 }
