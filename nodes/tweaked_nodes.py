@@ -993,6 +993,80 @@ class FaceAlignProRestore:
         restored_tensor = image_to_tensor(restored_pil).unsqueeze(0)
         return (restored_tensor,)
 
+import comfy.samplers
+from nodes import common_ksampler
+
+class KSamplerLoop:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True}),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                "positive": ("CONDITIONING",),
+                "negative": ("CONDITIONING",),
+                "latent_image": ("LATENT",),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "loop_count": ("INT", {"default": 1, "min": 1, "max": 100}),
+
+            },
+            "optional": {
+                "custom_denoise": ("STRING", {"default": "","tooltip": "英文逗号间隔每轮循环的denoise值"}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT","LATENT")
+    RETURN_NAMES = ("Latent", "Latents",)
+    FUNCTION = "sample"
+    CATEGORY = "sampling"
+
+    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
+               latent_image, denoise, loop_count, custom_denoise):
+        # 解析自定义降噪值
+        denoise_values = []
+        if custom_denoise.strip():
+            denoise_values = [float(x.strip()) for x in custom_denoise.split(',') if x.strip()]
+            if len(denoise_values) < loop_count:
+                denoise_values += [denoise_values[-1]] * (loop_count - len(denoise_values))
+            else:
+                denoise_values = denoise_values[:loop_count]
+        else:
+            denoise_values = [denoise] * loop_count
+
+        current_latent = latent_image
+        current_seed = seed
+        all_samples = []
+
+        for i in range(loop_count):
+            # 执行采样
+            current_latent = common_ksampler(
+                model,
+                current_seed,
+                steps,
+                cfg,
+                sampler_name,
+                scheduler,
+                positive,
+                negative,
+                current_latent,
+                denoise=denoise_values[i]
+            )[0]
+
+            # 收集所有采样结果
+            all_samples.append(current_latent["samples"])
+            current_seed += 1
+
+        # 合并批次结果
+        batch_latent = {
+            "samples": torch.cat(all_samples, dim=0),
+            "batch_index": list(range(loop_count))
+        }
+
+        return (current_latent, batch_latent)
 
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
@@ -1007,6 +1081,8 @@ NODE_CLASS_MAPPINGS = {
 
     "FaceAlignPro": FaceAlignPro,
     "FaceAlignProRestore":FaceAlignProRestore,
+
+    "SanmiKSampler": KSamplerLoop,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1021,4 +1097,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
     "FaceAlignPro": "Face Align Pro",
     "FaceAlignProRestore": "Face Align Pro Restore",
+
+    "SanmiKSampler": "SANMI: KSamplerLoop",
 }
