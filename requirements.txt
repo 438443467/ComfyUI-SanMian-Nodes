@@ -1,4 +1,4 @@
-openpyxl
+opencv-python
 pypinyin
 stegano
 pilgram
